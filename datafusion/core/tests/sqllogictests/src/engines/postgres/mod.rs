@@ -19,7 +19,7 @@ use std::{str::FromStr, time::Duration};
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use futures::{SinkExt, StreamExt};
+use futures::{executor, SinkExt, StreamExt};
 use log::debug;
 use sqllogictest::{ColumnType, DBOutput};
 use tokio::task::JoinHandle;
@@ -49,6 +49,7 @@ pub struct Postgres {
     join_handle: JoinHandle<()>,
     /// Filename, for display purposes
     file_name: String,
+    schema: String,
 }
 
 impl Postgres {
@@ -97,10 +98,25 @@ impl Postgres {
                         }
                     });
 
+                    let schema = file_name
+                        .split(".")
+                        .next()
+                        .unwrap()
+                        .strip_prefix("pg_")
+                        .unwrap()
+                        .to_string();
+                    client
+                        .execute(&format!("CREATE SCHEMA {}", &schema), &[])
+                        .await?;
+                    client
+                        .execute(&format!("SET search_path TO {}", &schema), &[])
+                        .await?;
+
                     return Ok(Self {
                         client,
                         join_handle,
                         file_name,
+                        schema,
                     });
                 }
             }
@@ -183,6 +199,10 @@ fn no_quotes(t: &str) -> &str {
 
 impl Drop for Postgres {
     fn drop(&mut self) {
+        executor::block_on(
+            self.client
+                .execute(&format!("DROP SCHEMA {} CASCADE", &self.schema), &[]),
+        );
         self.join_handle.abort()
     }
 }
